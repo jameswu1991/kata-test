@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kata-hello
+  namespace: kube-system
+spec:
+  runtimeClassName: kata
+  containers:
+  - name: hello
+    image: alpine:latest
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "=========================================="
+        echo "🚀 Hello from inside Cloud Hypervisor!"
+        echo "=========================================="
+        echo "My guest microVM kernel is: $(uname -r)"
+        echo "=========================================="
+  restartPolicy: Never
