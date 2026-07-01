@@ -132,7 +132,7 @@ data "cloudinit_config" "node_userdata" {
         exit 1
       fi
 
-      # 2. Download and install Kata Containers (including cloud-hypervisor)
+      # 2. Download and install Kata
       KATA_VERSION="3.32.0" # Use a stable 3.x release
       curl -fL -o /tmp/kata-static.tar.zst "https://github.com/kata-containers/kata-containers/releases/download/$KATA_VERSION/kata-static-$KATA_VERSION-amd64.tar.zst"
       zstd -d /tmp/kata-static.tar.zst --stdout | tar -x -C /
@@ -142,12 +142,35 @@ data "cloudinit_config" "node_userdata" {
       ln -sf /opt/kata/bin/containerd-shim-kata-v2 /usr/local/bin/containerd-shim-kata-v2
       ln -sf /opt/kata/bin/kata-monitor /usr/local/bin/kata-monitor
 
-      # 3. Configure containerd to recognize the Kata runtime class
+      # 3. Prepare the devmapper thin pool
+      mkdir -p /var/lib/containerd/devmapper
+      truncate -s 10G /var/lib/containerd/devmapper/data
+      truncate -s 1G /var/lib/containerd/devmapper/metadata
+      DATA_DEV=$(losetup --find --show /var/lib/containerd/devmapper/data)
+      META_DEV=$(losetup --find --show /var/lib/containerd/devmapper/metadata)
+      dmsetup create containerd-pool --table "0 16777216 thin-pool $META_DEV $DATA_DEV 128 32768"
+
+      # 4. Configure containerd to recognize the Kata runtime class
       cat <<EOF >> /etc/containerd/config.toml
       [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata]
         runtime_type = "io.containerd.kata.v2"
         [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata.options]
           ConfigPath = "/opt/kata/share/defaults/kata-containers/configuration-clh.toml"
+
+      [plugins."io.containerd.grpc.v1.cri".containerd]
+        discard_unpacked_layers = false # Keep unpacked layers for devmapper snapshotter
+        disable_snapshot_annotations = false # cri can pass snapshotter config to image puller
+
+      [plugins."io.containerd.snapshotter.v1.devmapper"]
+        pool_name = "containerd-pool"
+        root_path = "/var/lib/containerd/devmapper"
+        base_image_size = "4GB"
+
+      [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata-fc]
+        runtime_type = "io.containerd.kata.v2"
+        snapshotter = "devmapper"
+        [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata-fc.options]
+          ConfigPath = "/opt/kata/share/defaults/kata-containers/configuration-fc.toml"
       EOF
 
       # Restart containerd to pick up the new configuration snippet
