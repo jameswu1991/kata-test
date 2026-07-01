@@ -126,23 +126,21 @@ data "cloudinit_config" "node_userdata" {
       #!/bin/bash
       set -xe
 
-      # 1. Verify nested virtualization (KVM) is functional
+      # verify nested virtualization (kvm) is functional
       if [ ! -e /dev/kvm ]; then
         echo "KVM is not available. Ensure nested virtualization is enabled."
         exit 1
       fi
 
-      # 2. Download and install Kata
+      # download and install kata
       KATA_VERSION="3.32.0" # Use a stable 3.x release
       curl -fL -o /tmp/kata-static.tar.zst "https://github.com/kata-containers/kata-containers/releases/download/$KATA_VERSION/kata-static-$KATA_VERSION-amd64.tar.zst"
       zstd -d /tmp/kata-static.tar.zst --stdout | tar -x -C /
-
-      # Create symlinks for convenience
       ln -sf /opt/kata/bin/kata-runtime /usr/local/bin/kata-runtime
       ln -sf /opt/kata/bin/containerd-shim-kata-v2 /usr/local/bin/containerd-shim-kata-v2
       ln -sf /opt/kata/bin/kata-monitor /usr/local/bin/kata-monitor
 
-      # 3. Prepare the devmapper thin pool
+      # prepare the devmapper thin pool
       mkdir -p /var/lib/containerd/devmapper
       truncate -s 10G /var/lib/containerd/devmapper/data
       truncate -s 1G /var/lib/containerd/devmapper/metadata
@@ -150,7 +148,21 @@ data "cloudinit_config" "node_userdata" {
       META_DEV=$(losetup --find --show /var/lib/containerd/devmapper/metadata)
       dmsetup create containerd-pool --table "0 16777216 thin-pool $META_DEV $DATA_DEV 128 32768"
 
-      # 4. Configure containerd to recognize the Kata runtime class
+      # install gvisor runsc
+      (
+        set -e
+        ARCH=$(uname -m)
+        URL=https://storage.googleapis.com/gvisor/releases/release/latest/$ARCH
+        wget $URL/runsc $URL/runsc.sha512 \
+          $URL/containerd-shim-runsc-v1 $URL/containerd-shim-runsc-v1.sha512
+        sha512sum -c runsc.sha512 \
+          -c containerd-shim-runsc-v1.sha512
+        rm -f *.sha512
+        chmod a+rx runsc containerd-shim-runsc-v1
+        sudo mv runsc containerd-shim-runsc-v1 /usr/local/bin
+      )
+
+      # configure containerd to recognize the kata runtime class
       cat <<EOF >> /etc/containerd/config.toml
       [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata]
         runtime_type = "io.containerd.kata.v2"
@@ -171,6 +183,9 @@ data "cloudinit_config" "node_userdata" {
         snapshotter = "devmapper"
         [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata-fc.options]
           ConfigPath = "/opt/kata/share/defaults/kata-containers/configuration-fc.toml"
+
+      [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.runsc]
+        runtime_type = "io.containerd.runsc.v1"
       EOF
 
       # Restart containerd to pick up the new configuration snippet

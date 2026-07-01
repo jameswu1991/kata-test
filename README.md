@@ -18,3 +18,12 @@ sudo ctr -n k8s.io images pull --local --snapshotter devmapper --platform linux/
 My guest Firecracker microVM kernel is: 6.18.35
 ==========================================
 ```
+
+```
+❯ k logs -f runsc-hello
+==========================================
+🚀 Hello from inside gvisor!
+==========================================
+My guest gvisor kernel is: 4.19.0-gvisor
+==========================================
+```

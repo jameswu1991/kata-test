@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: runsc-hello
+  namespace: kube-system
+spec:
+  runtimeClassName: runsc
+  containers:
+  - name: hello
+    image: alpine:latest
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "=========================================="
+        echo "🚀 Hello from inside gvisor!"
+        echo "=========================================="
+        echo "My guest gvisor kernel is: $(uname -r)"
+        echo "=========================================="
+  restartPolicy: Never
