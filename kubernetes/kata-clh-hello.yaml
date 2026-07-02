@@ -1,10 +1,10 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: kata-hello
+  name: kata-clh-hello
   namespace: kube-system
 spec:
-  runtimeClassName: kata
+  runtimeClassName: kata-clh
   containers:
   - name: hello
     image: alpine:latest

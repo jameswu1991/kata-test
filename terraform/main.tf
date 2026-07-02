@@ -164,9 +164,9 @@ data "cloudinit_config" "node_userdata" {
 
       # configure containerd to recognize the kata runtime class
       cat <<EOF >> /etc/containerd/config.toml
-      [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata]
+      [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata-clh]
         runtime_type = "io.containerd.kata.v2"
-        [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata.options]
+        [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata-clh.options]
           ConfigPath = "/opt/kata/share/defaults/kata-containers/configuration-clh.toml"
 
       [plugins."io.containerd.grpc.v1.cri".containerd]

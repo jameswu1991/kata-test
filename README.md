@@ -25,7 +25,7 @@ these demos using the linux kvm uses kata, which does the magic of turning conta
 cloud hypervisor has a lot of backing behind it from big names like arm/amd/intel/google, and linux foundation.
 
 ```
-❯ k logs -f kata-hello 
+❯ k logs -f kata-clh-hello
 ==========================================
 🚀 Hello from inside Cloud Hypervisor!
 ==========================================
@@ -51,7 +51,7 @@ My guest Firecracker microVM kernel is: 6.18.35
 ==========================================
 ```
 
-# gvisor
+## gvisor
 
 gvisor doesn't use kvm at all. it provides its own kernel to run in the userspace. it may not be as fully featured as the linux kvm, but it should have enough compatibility for most basic workloads. also ~20% slower depending on the workload compared to native kernel performance. can run on non-virtualize-enabled environments like vmware esxi for on-prem deployments.
 
