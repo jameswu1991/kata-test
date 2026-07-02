@@ -37,6 +37,8 @@ My guest microVM kernel is: 6.18.35
 
 firecracker is also a vmm, started at aws, lacks virtio-fs support, harder to setup and requires manually mapping thin pools for block storage (see userdata scripts)
 
+due to the crazy block storage setup for firecracker, there seems to be some issues with pulling images that are initially fetched as tarballs. containerd's image puller seems to discard the tarball as soon as it's unarchived, rather than passing it along to block storage. if your container won't start and the `k describe` status is 'i can't find the tarball', then try manually pulling that image. not sure how to solve this yet.
+
 ```
 # manually pull if cached without tarball
 sudo ctr -n k8s.io images pull --local --snapshotter devmapper --platform linux/amd64 docker.io/library/alpine:latest
