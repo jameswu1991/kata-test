@@ -12,6 +12,19 @@ apply `terraform/` resources and deploy the vpc, eks cluster, and single worker 
 
 apply `kubernetes/` resources to run pod tests to ensure that the pods 1. spin up properly and 2. can properly print their kernel name. don't forget to apply the runtime definitions so that kubernetes knows to pass down these flags to containerd.
 
+```
+❯ k get pods
+NAME                           READY   STATUS      RESTARTS   AGE
+aws-node-9tfs8                 2/2     Running     0          12m
+eks-pod-identity-agent-tprkl   1/1     Running     0          12m
+kata-clh-hello                 0/1     Completed   0          2m6s
+kata-fc-hello                  0/1     Completed   0          119s
+kvm-check                      0/1     Completed   0          2m28s
+runsc-hello                    0/1     Completed   0          111s
+```
+
+<img src="Screenshot.png" width="600">
+
 # tests
 
 ## linux kvm + vmm (microvms)
