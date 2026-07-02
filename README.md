@@ -8,15 +8,17 @@ Sorry I left the original diagram on my home browser's excalidraw localStorage, 
 
 # how to use
 
-apply `terraform/` resources and deploy the vpc, eks cluster, and single worker node (has to be a c8i.large or above, otherwise no hardwawre-enabled cpu virtualization for linux kvm)
+apply `terraform/` resources and deploy the vpc, eks cluster, and single worker node (has to be a c8i.large (or metal) or above, otherwise no hardwawre-enabled cpu virtualization for linux kvm). note that nested virtualization is enabled.
 
 apply `kubernetes/` resources to run pod tests to ensure that the pods 1. spin up properly and 2. can properly print their kernel name. don't forget to apply the runtime definitions so that kubernetes knows to pass down these flags to containerd.
 
 # tests
 
-## linux kvm + vmm
+## linux kvm + vmm (microvms)
 
 if access to baremetal is possible (i.e. enabling bios virtualization flags), or nested virtualizaton is psosible, then the linux kvm is the most performant option. this is available on c8i (intel) instances, baremetal instances, and on-prem baremetal machines. the following sections document some common vmms (missing qemu, which seems to be going through an indentity crisis right now about if it wants compatibilitymaxx or lightweightmaxx)
+
+these demos using the linux kvm uses kata, which does the magic of turning containerd requests (for spinning up containers) to microvm spin-up calls using the linux kvm + vmm.
 
 ### cloud hypervisor
 
@@ -50,6 +52,8 @@ My guest Firecracker microVM kernel is: 6.18.35
 # gvisor
 
 gvisor doesn't use kvm at all. it provides its own kernel to run in the userspace. it may not be as fully featured as the linux kvm, but it should have enough compatibility for most basic workloads. also ~20% slower depending on the workload compared to native kernel performance. can run on non-virtualize-enabled environments like vmware esxi for on-prem deployments.
+
+gvisor does not use kata, but instead replaces it (by replacing `runc` like kata does) using `runsc` (s for Sentry, i presume).
 
 ```
 ❯ k logs -f runsc-hello
