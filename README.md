@@ -2,7 +2,7 @@
 
 this repo is a quick test / demo of running eks with alternative container runtimes (like microVMs with firecracker or cloud hypervisor), or with non-kvm solutions like gvisor.
 
-<img src="Scan_20260701_173837.jpg" width="400">
+<img src="Screenshot-2026-07-02-113416.png" width="400">
 
 Sorry I left the original diagram on my home browser's excalidraw localStorage, will update when I get home.
 
