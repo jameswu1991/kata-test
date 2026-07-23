@@ -29,6 +29,8 @@ module "app" {
   name    = "${local.name}-cluster"
   kubernetes_version = "1.36"
 
+  enable_cluster_creator_admin_permissions = true
+
   addons = {
     vpc-cni = {
       configuration_values = jsonencode({
