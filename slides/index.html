@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sandboxing agent workloads with microVMs</title>
+<style>
+  :root{
+    --bg:#0E1420; --bg2:#0A0E16; --panel:#18202E; --panel2:#1E2838;
+    --border:#2C384B; --text:#F4F7FB; --muted:#9BA8B9;
+    --teal:#2DD4BF; --amber:#F5A524; --violet:#A78BFA; --red:#F26D6D; --green:#34D399;
+    --mono:'SF Mono',ui-monospace,Menlo,Consolas,monospace;
+    --head:'Segoe UI',-apple-system,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:#05070c;font-family:var(--head);color:var(--text);overflow:hidden}
+  #stageWrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+  #stage{width:1280px;height:720px;position:relative;transform-origin:center center;background:var(--bg)}
+  .slide{position:absolute;inset:0;padding:52px 64px;display:none;flex-direction:column;
+         background:var(--bg);overflow:hidden}
+  .slide.active{display:flex;animation:fade .32s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  .slide.dark{background:var(--bg2)}
+
+  /* full-bleed photo dividers */
+  .photo{position:absolute;inset:0;background-size:cover;background-position:center;z-index:0}
+  .scrim{position:absolute;inset:0;z-index:1}
+  .layer{position:relative;z-index:2;display:flex;flex-direction:column;height:100%}
+
+  h1{font-size:52px;font-weight:800;letter-spacing:-.5px;line-height:1.05}
+  h2{font-size:33px;font-weight:800;letter-spacing:-.3px}
+  .sub{color:var(--muted);font-size:19px;font-style:italic;margin-top:10px}
+
+  .chip{display:inline-flex;align-items:center;gap:9px;font-weight:800;font-size:12px;
+        letter-spacing:2px;text-transform:uppercase}
+  .chip .dot{width:15px;height:15px;border-radius:4px}
+
+  .muted{color:var(--muted)}
+  .mono{font-family:var(--mono)}
+  .row{display:flex}
+  .grow{flex:1}
+  .foot{position:absolute;left:64px;right:64px;bottom:26px;display:flex;justify-content:space-between;
+        color:var(--muted);font-size:12px;z-index:3;align-items:center}
+  .foot .l{display:flex;align-items:center;gap:9px}
+  .foot .l .d{width:9px;height:9px;border-radius:50%;background:var(--teal)}
+
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:22px}
+  .badge{display:inline-flex;align-items:center;justify-content:center;font-family:var(--mono);
+         font-weight:700;font-size:14px;color:var(--bg2);border-radius:22px;padding:8px 16px}
+  .ic{width:46px;height:46px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+      font-weight:800;font-size:18px;color:var(--bg2);flex:none}
+  .ic.sm{width:40px;height:40px;font-size:16px}
+
+  .term{background:var(--bg2);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+  .term .bar{padding:12px 16px;font-family:var(--mono);font-weight:700;font-size:13px;color:var(--bg2)}
+  .term .body{padding:16px 18px;font-family:var(--mono);font-size:15px;line-height:1.5}
+
+  .flow{display:flex;align-items:center;gap:0}
+  .arrow{color:var(--muted);font-size:26px;padding:0 8px;flex:none}
+  .arrowd{color:var(--muted);text-align:center;font-size:22px;line-height:.6}
+
+  /* notes panel */
+  #notes{position:fixed;left:0;right:0;bottom:0;max-height:42vh;overflow:auto;background:#070b12ee;
+         border-top:2px solid var(--teal);padding:22px 30px;display:none;z-index:50;
+         font-size:16px;line-height:1.55;color:#dfe6ef;backdrop-filter:blur(6px)}
+  #notes.show{display:block}
+  #notes h4{color:var(--teal);font-size:13px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:10px}
+  #notes p{margin-bottom:10px;white-space:pre-wrap}
+  /* hud */
+  #hud{position:fixed;right:16px;bottom:14px;z-index:60;color:#7d8a9c;font-size:13px;
+       font-family:var(--mono);background:#0a0e16aa;padding:6px 12px;border-radius:20px;border:1px solid var(--border)}
+  #help{position:fixed;left:16px;bottom:14px;z-index:60;color:#7d8a9c;font-size:12px;
+        font-family:var(--mono);background:#0a0e16aa;padding:6px 12px;border-radius:20px;border:1px solid var(--border)}
+  b.k{color:var(--teal)}
+</style>
+</head>
+<body>
+<div id="stageWrap"><div id="stage"></div></div>
+<div id="notes"><h4>Speaker notes</h4><div id="notesBody"></div></div>
+<div id="help">◀ ▶ / space · <b class="k">N</b> notes · <b class="k">F</b> full</div>
+<div id="hud"><span id="cur">1</span> / <span id="tot">21</span></div>
+
+<template id="slides">
+
+<!-- 1 TITLE -->
+<section class="slide" data-notes="The goal of this project is to safely run the code that AI agents generate. An agent writes code and then runs it, and we can't check that code first — so it needs a real sandbox, not just a container.
+
+I'll cover four things: why a normal container isn't enough, a working demo on EKS where each workload gets its own kernel via a microVM, how that works, and where else the same approach fits.
+
+It's all in one repo — Terraform plus the Kubernetes manifests. Link at the end.">
+  <div class="photo" style="background-image:url(assets/title_datacenter.jpg)"></div>
+  <div class="scrim" style="background:linear-gradient(90deg,#0A0E16f2 0%,#0A0E16aa 42%,#0A0E1655 100%)"></div>
+  <div class="layer" style="justify-content:flex-end;padding-bottom:20px">
+    <div class="chip" style="color:var(--teal);margin-bottom:20px"><span class="dot" style="background:var(--teal)"></span>Demo</div>
+    <h1 style="font-size:50px;max-width:980px">Sandboxing agent workloads<br>with microVMs</h1>
+    <div class="mono" style="color:var(--teal);font-size:15px;margin-top:22px">Kata microVMs · gVisor · Amazon EKS</div>
+    <div class="muted" style="font-size:14px;margin-top:20px">James</div>
+  </div>
+</section>
+
+<!-- 2 DIVIDER PROBLEM -->
+<section class="slide" data-notes="Here's the thing people forget about containers. A container is NOT a small VM. Section one: why running agent code in a normal container isn't safe.">
+  <div class="photo" style="background-image:url(assets/matrix_code.jpg)"></div>
+  <div class="scrim" style="background:#0A0E16c0"></div>
+  <div class="layer" style="justify-content:center">
+    <div style="font-size:68px;font-weight:800;color:var(--red)">01</div>
+    <h1 style="margin-top:6px">The problem</h1>
+  </div>
+</section>
+
+<!-- 3 SHARED KERNEL -->
+<section class="slide" data-notes="A container is NOT a small VM. There's no separate kernel in there.
+
+All the isolation a container gives you — namespaces and cgroups — is just the SAME host kernel keeping bookkeeping about who can see what. Every one of your containers, and every neighbor's, makes system calls directly into that one shared kernel.
+
+That's the red bar. It's a single shared component, and Linux exposes 400+ system calls of attack surface. If untrusted code finds one exploitable bug, it isn't stuck in the container — it's in the kernel, which means the host and every other container on the node.
+
+So the wall between tenants is thinner than the mental model suggests. That's the problem we're solving.">
+  <div class="chip" style="color:var(--red)"><span class="dot" style="background:var(--red)"></span>The Problem</div>
+  <h2 style="margin-top:14px">Containers share one kernel</h2>
+  <div class="row grow" style="gap:40px;margin-top:26px;align-items:center">
+    <div style="flex:1.25">
+      <div class="flow" style="justify-content:space-between">
+        <!-- containers -->
+        <div style="display:flex;gap:14px;flex:1;justify-content:space-between">
+          <div class="cont" style="--c:var(--teal)">app A</div>
+          <div class="cont" style="--c:var(--amber)">app B</div>
+          <div class="cont" style="--c:var(--violet)">app C</div>
+          <div class="cont" style="--c:var(--green)">app D</div>
+        </div>
+      </div>
+      <div style="text-align:center;color:var(--muted);font-size:22px;margin:6px 0">▼&nbsp;&nbsp;&nbsp;&nbsp;▼&nbsp;&nbsp;&nbsp;&nbsp;▼&nbsp;&nbsp;&nbsp;&nbsp;▼</div>
+      <div style="background:#3A1E22;border:2px solid var(--red);border-radius:12px;padding:20px;text-align:center;
+                  font-family:var(--mono);font-weight:700;font-size:19px;color:var(--red);letter-spacing:1px">
+        ONE&nbsp; SHARED&nbsp; LINUX&nbsp; KERNEL</div>
+      <div style="text-align:center;color:var(--muted);font-size:20px;margin:4px 0">▼</div>
+      <div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px;
+                  text-align:center;color:var(--muted);font-size:15px">Host hardware</div>
+    </div>
+    <div style="flex:.9">
+      <p style="font-size:17px">The isolation is namespaces + cgroups —<br><b>bookkeeping, not a wall.</b></p>
+      <p class="muted" style="font-size:16px;margin-top:16px">Every container calls straight into <b style="color:var(--red)">the same kernel</b> as its neighbors and the host.</p>
+      <div style="margin-top:20px"><span style="font-size:34px;font-weight:800">≈ 400+</span> <span class="muted" style="font-size:16px">syscalls</span></div>
+      <p class="muted" style="font-size:14px;margin-top:6px">of shared attack surface, exposed to untrusted code by default.</p>
+    </div>
+  </div>
+  <div class="foot"><div class="l"><span class="d"></span>Sandboxing agents · microVMs on EKS</div><div>The Problem</div></div>
+</section>
+
+<!-- 4 BLAST RADIUS -->
+<section class="slide" data-notes="Let me make that chain concrete — it's a domino effect.
+
+Step one: a bug in the shared kernel — container-escape CVEs are a whole genre.
+Step two: untrusted code uses it to escape its container.
+Step three: because the kernel IS the host, the attacker now controls the node.
+Step four: every other tenant on that node is exposed.
+
+So a single kernel bug isn't a one-container problem — it's a whole-node problem.
+
+The line at the bottom is the framing I keep coming back to: none of us would run a stranger's binary on our laptop as root. A shared-kernel container running untrusted code is uncomfortably close to exactly that.">
+  <div class="chip" style="color:var(--red)"><span class="dot" style="background:var(--red)"></span>The Problem</div>
+  <h2 style="margin-top:14px">If the kernel is shared, one bug hits everyone</h2>
+  <div class="row" style="gap:16px;margin-top:26px">
+    <div class="card" style="flex:1"><div class="ic" style="background:var(--red)">!</div><h3 style="margin-top:16px;font-size:18px">Kernel bug</h3><p class="muted" style="margin-top:8px;font-size:14px">One CVE in the shared kernel…</p></div>
+    <div class="arrow" style="align-self:center">→</div>
+    <div class="card" style="flex:1"><div class="ic" style="background:var(--amber)">↑</div><h3 style="margin-top:16px;font-size:18px">Container escape</h3><p class="muted" style="margin-top:8px;font-size:14px">…lets untrusted code break out of its box.</p></div>
+    <div class="arrow" style="align-self:center">→</div>
+    <div class="card" style="flex:1"><div class="ic" style="background:var(--amber)">⌂</div><h3 style="margin-top:16px;font-size:18px">Host takeover</h3><p class="muted" style="margin-top:8px;font-size:14px">The attacker now owns the node itself.</p></div>
+    <div class="arrow" style="align-self:center">→</div>
+    <div class="card" style="flex:1"><div class="ic" style="background:var(--red)">×</div><h3 style="margin-top:16px;font-size:18px">Neighbor breach</h3><p class="muted" style="margin-top:8px;font-size:14px">Every other tenant on that node is exposed.</p></div>
+  </div>
+  <div style="background:#3A1E22;border:1px solid var(--red);border-radius:12px;padding:18px 22px;margin-top:26px;font-size:16px">
+    Running an agent's code in a plain container is close to running a stranger's program on your laptop as root.</div>
+  <div class="foot"><div class="l"><span class="d"></span>Sandboxing agents · microVMs on EKS</div><div>The Problem</div></div>
+</section>
+
+<!-- 5 USE CASES -->
+<section class="slide" data-notes="This is the workload we care about: agents that write code and then run it. We can't review that code before it runs, so it needs a real boundary.
+
+The same shape shows up elsewhere — user plugins, notebooks, CI builds from forks, multi-tenant SaaS — but agents are what's driving this.
+
+The usual answer is a VM or node per tenant. Safe, but you lose the density and speed of containers. We want the isolation of a VM with the feel of a container.">
+  <div style="position:absolute;right:0;top:0;bottom:0;width:34%;background-image:url(assets/crowd_shared.jpg);background-size:cover;background-position:center;z-index:0"></div>
+  <div style="position:absolute;right:0;top:0;bottom:0;width:40%;z-index:1;background:linear-gradient(90deg,var(--bg) 0%,#0E1420bb 30%,#0E142066 100%)"></div>
+  <div class="layer">
+    <div class="chip" style="color:var(--red)"><span class="dot" style="background:var(--red)"></span>The Problem</div>
+    <h2 style="margin-top:14px">Agents run code you can't trust</h2>
+    <div style="margin-top:26px;display:flex;flex-direction:column;gap:20px;max-width:690px">
+      <div class="row" style="gap:16px;align-items:flex-start"><div class="ic sm" style="background:var(--violet)">›</div><div><h3 style="font-size:17px">An agent writes code, then runs it</h3><p class="muted" style="font-size:14px">You can't review it first. It still has to run somewhere.</p></div></div>
+      <div class="row" style="gap:16px;align-items:flex-start"><div class="ic sm" style="background:var(--amber)">›</div><div><h3 style="font-size:17px">Same shape as other untrusted code</h3><p class="muted" style="font-size:14px">User plugins, notebooks, CI builds from forks, multi-tenant SaaS.</p></div></div>
+      <div class="row" style="gap:16px;align-items:flex-start"><div class="ic sm" style="background:var(--green)">›</div><div><h3 style="font-size:17px">A container isn't a strong enough boundary</h3><p class="muted" style="font-size:14px">It shares the host kernel — so a container escape is a real risk.</p></div></div>
+    </div>
+  </div>
+  <div class="foot"><div class="l"><span class="d"></span>Sandboxing agents · microVMs on EKS</div><div>The Problem</div></div>
+</section>
+
+<!-- 6 THE IDEA -->
+<section class="slide dark" data-notes="Here's the idea that ties the demo together: give each workload its own kernel. Then a kernel bug is contained to that one pod, instead of reaching the host.
+
+Two fundamentally different ways to do that, and the demo shows BOTH.
+
+Approach A: boot an actual microVM. A real, separate guest kernel inside hardware virtualization — but stripped down so it boots in milliseconds, not 30 seconds. That's Kata Containers, run with two VM monitors: Cloud Hypervisor and Firecracker.
+
+Approach B: no VM at all. Put a second kernel — an ordinary userspace program written in Go — between the app and the host kernel. It intercepts syscalls and services them itself. That's gVisor. No special hardware needed, which matters for where you can run it.
+
+Keep these two lanes in your head — microVM and userspace kernel. The rest of the talk is these two columns.">
+  <div class="chip" style="color:var(--teal)"><span class="dot" style="background:var(--teal)"></span>The Idea</div>
+  <h1 style="margin-top:16px;font-size:44px">Give each workload <span style="color:var(--teal)">its own kernel</span></h1>
+  <div class="row grow" style="gap:22px;margin-top:34px">
+    <div class="card" style="flex:1;padding:0;overflow:hidden">
+      <div style="background:#12242A;padding:18px 24px"><h3 style="color:var(--teal);font-size:21px">A.&nbsp; Boot a real microVM</h3></div>
+      <div style="padding:24px">
+        <p style="font-size:16px">Give the pod a genuine guest kernel inside a hardware-virtualized VM — booted in milliseconds.</p>
+        <p class="mono" style="color:var(--teal);font-size:14px;margin-top:20px">Kata Containers + Cloud Hypervisor / Firecracker</p>
+      </div>
+    </div>
+    <div class="card" style="flex:1;padding:0;overflow:hidden">
+      <div style="background:#241E38;padding:18px 24px"><h3 style="color:var(--violet);font-size:21px">B.&nbsp; Emulate the kernel in userspace</h3></div>
+      <div style="padding:24px">
+        <p style="font-size:16px">Put a second kernel — written in Go — between the app and the host. No hardware virtualization required.</p>
+        <p class="mono" style="color:var(--violet);font-size:14px;margin-top:20px">gVisor · runsc</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 7 DIVIDER DEMO -->
+<section class="slide" data-notes="Section two: the demo. Real EKS cluster, real microVMs, live output.">
+  <div class="photo" style="background-image:url(assets/network_blue.jpg)"></div>
+  <div class="scrim" style="background:#0A0E16bb"></div>
+  <div class="layer" style="justify-content:center">
+    <div style="font-size:68px;font-weight:800;color:var(--teal)">02</div>
+    <h1 style="margin-top:6px">The demo</h1>
+  </div>
+</section>
+
+<!-- 8 WHAT WE BUILT -->
+<section class="slide" data-notes="The footprint is deliberately tiny — easy to reason about, cheap to run.
+
+One EKS cluster on Kubernetes 1.36. One worker node — a c8i.large. That instance choice is load-bearing: c8i exposes hardware virtualization to the guest — nested virtualization — which is what lets us run KVM, and therefore microVMs, INSIDE an EC2 instance. Most instance types can't do this at all.
+
+On that node, three isolation runtimes side by side. And the whole thing — VPC, EKS control plane, node, IAM — is 57 resources from one terraform apply.
+
+The workflow is genuinely three commands: terraform apply, update-kubeconfig, kubectl apply. That's the entire operator experience.">
+  <div class="chip" style="color:var(--teal)"><span class="dot" style="background:var(--teal)"></span>The Demo</div>
+  <h2 style="margin-top:14px">What's running right now</h2>
+  <div class="row" style="gap:16px;margin-top:24px">
+    <div class="card" style="flex:1"><div style="font-size:44px;font-weight:800;color:var(--teal)">1</div><h3 style="margin-top:6px;font-size:16px">EKS cluster</h3><p class="muted" style="font-size:13px;margin-top:4px">Kubernetes 1.36, us-west-2</p></div>
+    <div class="card" style="flex:1"><div style="font-size:44px;font-weight:800;color:var(--amber)">1</div><h3 style="margin-top:6px;font-size:16px">worker node</h3><p class="muted" style="font-size:13px;margin-top:4px">c8i.large · nested virtualization on</p></div>
+    <div class="card" style="flex:1"><div style="font-size:44px;font-weight:800;color:var(--violet)">3</div><h3 style="margin-top:6px;font-size:16px">isolation runtimes</h3><p class="muted" style="font-size:13px;margin-top:4px">Kata-CLH · Kata-FC · gVisor</p></div>
+    <div class="card" style="flex:1"><div style="font-size:44px;font-weight:800;color:var(--green)">57</div><h3 style="margin-top:6px;font-size:16px">resources, one apply</h3><p class="muted" style="font-size:13px;margin-top:4px">VPC · EKS · node · IAM, via Terraform</p></div>
+  </div>
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:18px 22px;margin-top:24px">
+    <div class="muted" style="font-size:11px;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px">deploy in three commands</div>
+    <div class="mono" style="font-size:15px;line-height:1.7">
+      <div style="color:var(--teal)">$ terraform apply</div>
+      <div>$ aws eks update-kubeconfig --name james-cluster</div>
+      <div>$ kubectl apply -f kubernetes/</div>
+    </div>
+  </div>
+  <div class="foot"><div class="l"><span class="d"></span>Sandboxing agents · microVMs on EKS</div><div>The Demo</div></div>
+</section>
+
+<!-- 9 THE PODS -->
+<section class="slide" data-notes="The actual workloads. Four pods.
+
+kvm-check is a sanity probe — it verifies /dev/kvm, the KVM device, is present on the node and mapped into the container. That's the foundation the microVM runtimes stand on.
+
+The other three each print a hello and their kernel version. The only meaningful difference between them is one line in the pod spec: runtimeClassName. kata-clh, kata-fc, or runsc. That single field is how a developer opts into stronger isolation — everything else is a normal pod.
+
+Kubernetes sees that name, matches a RuntimeClass, and routes the pod to the right engine. Same YAML shape, three very different execution environments.">
+  <div class="chip" style="color:var(--teal)"><span class="dot" style="background:var(--teal)"></span>The Demo</div>
+  <h2 style="margin-top:14px">Four pods, three runtimes</h2>
+  <div class="sub" style="font-size:15px">Each pod asks for a runtime by name via <span class="mono" style="font-style:normal">runtimeClassName</span> — Kubernetes routes it to the right engine.</div>
+  <div style="margin-top:22px">
+    <div class="row muted" style="font-size:11px;letter-spacing:1px;text-transform:uppercase;padding:0 18px 8px">
+      <div style="flex:1.4">Pod</div><div style="flex:1">runtimeClassName</div><div style="flex:2">What it proves</div></div>
+    <div class="prow" style="--c:var(--green)"><div style="flex:1.4" class="mono b">kvm-check</div><div style="flex:1" class="mono" style="color:var(--muted)">—</div><div style="flex:2" class="muted">Confirms /dev/kvm is present &amp; mapped in</div></div>
+    <div class="prow" style="--c:var(--teal)"><div style="flex:1.4" class="mono b">kata-clh-hello</div><div style="flex:1" class="mono cc">kata-clh</div><div style="flex:2" class="muted">microVM via Cloud Hypervisor</div></div>
+    <div class="prow" style="--c:var(--amber)"><div style="flex:1.4" class="mono b">kata-fc-hello</div><div style="flex:1" class="mono cc">kata-fc</div><div style="flex:2" class="muted">microVM via Firecracker</div></div>
+    <div class="prow" style="--c:var(--violet)"><div style="flex:1.4" class="mono b">runsc-hello</div><div style="flex:1" class="mono cc">runsc</div><div style="flex:2" class="muted">userspace kernel via gVisor</div></div>
+  </div>
+  <div class="foot"><div class="l"><span class="d"></span>Sandboxing agents · microVMs on EKS</div><div>The Demo</div></div>
+</section>
+
+<!-- 10 PROOF -->
+<section class="slide" data-notes="This is the payoff — real log output from the three pods, live on the cluster.
+
+Look at the kernel line, that's the whole story. The two Kata pods — Cloud Hypervisor and Firecracker — report kernel 6.18.35. That is a genuine guest kernel inside a microVM; each pod booted its own. gVisor reports 4.19.0-gvisor — a DIFFERENT version string with 'gvisor' baked in, because that's not a real Linux kernel at all, it's gVisor's own reimplementation identifying itself.
+
+So three pods, each genuinely NOT sharing the host's kernel. The claim from the first half, demonstrated end to end.
+
+Along the bottom, kvm-check confirms the foundation: /dev/kvm present on the node and mapped into the container — what makes the microVM path possible on an EC2 instance.
+
+Happy to kubectl logs these live in Q&A — same output.">
+  <div class="chip" style="color:var(--teal)"><span class="dot" style="background:var(--teal)"></span>The Demo</div>
+  <h2 style="margin-top:14px">It works</h2>
+  <div class="row" style="gap:18px;margin-top:22px">
+    <div class="term" style="flex:1;border:1.5px solid var(--teal)">
+      <div class="bar" style="background:var(--teal)">k logs kata-clh-hello</div>
+      <div class="body">
+        <div style="color:var(--teal);font-size:10px">==============================</div>
+        <div>&gt; Hello from inside</div>
+        <div style="color:var(--teal);font-weight:700">&nbsp;&nbsp;Cloud Hypervisor!</div>
+        <div style="color:var(--teal);font-size:10px">==============================</div>
+        <div class="muted" style="font-size:12px;margin-top:12px">guest kernel:</div>
+        <div style="color:var(--teal);font-weight:700;font-size:20px">6.18.35</div>
+      </div>
+    </div>
+    <div class="term" style="flex:1;border:1.5px solid var(--amber)">
+      <div class="bar" style="background:var(--amber)">k logs kata-fc-hello</div>
+      <div class="body">
+        <div style="color:var(--amber);font-size:10px">==============================</div>
+        <div>&gt; Hello from inside</div>
+        <div style="color:var(--amber);font-weight:700">&nbsp;&nbsp;Firecracker!</div>
+        <div style="color:var(--amber);font-size:10px">==============================</div>
+        <div class="muted" style="font-size:12px;margin-top:12px">guest kernel:</div>
+        <div style="color:var(--amber);font-weight:700;font-size:20px">6.18.35</div>
+      </div>
+    </div>
+    <div class="term" style="flex:1;border:1.5px solid var(--violet)">
+      <div class="bar" style="background:var(--violet)">k logs runsc-hello</div>
+      <div class="body">
+        <div style="color:var(--violet);font-size:10px">==============================</div>
+        <div>&gt; Hello from inside</div>
+        <div style="color:var(--violet);font-weight:700">&nbsp;&nbsp;gVisor!</div>
+        <div style="color:var(--violet);font-size:10px">==============================</div>
+        <div class="muted" style="font-size:12px;margin-top:12px">guest kernel:</div>
+        <div style="color:var(--violet);font-weight:700;font-size:20px">4.19.0-gvisor</div>
+      </div>
+    </div>
+  </div>
+  <div style="background:#12261C;border:1px solid var(--green);border-radius:12px;padding:12px 18px;margin-top:20px;display:flex;align-items:center;gap:14px">
+    <div class="ic sm" style="background:var(--green)">✓</div>
+    <div class="mono" style="font-size:14px"><b style="color:var(--green)">kvm-check:</b> /dev/kvm present on host · successfully mapped into the container</div>
+  </div>
+  <div class="foot"><div class="l"><span class="d"></span>Sandboxing agents · microVMs on EKS</div><div>The Demo</div></div>
+</section>
+
+<!-- 11 READING RESULTS -->
+<section class="slide" data-notes="Why those two numbers are the proof, not decoration.
+
+Left, 6.18.35. Both microVM pods report it because each booted its own real Linux kernel inside its VM. Security consequence: a kernel exploit is trapped in the VM. It hits the GUEST kernel, and the hardware boundary stops it — it never reaches the host or the other tenants. Blast radius: one pod.
+
+Right, 4.19.0-gvisor. Different philosophy. gVisor doesn't boot a VM; it runs a kernel it implemented in Go, in userspace, and answers the app's syscalls itself. The real host kernel is barely touched. And it needs no KVM, so it runs where microVMs can't.
+
+Same experiment, two genuinely different ways to get isolation. The kernel version string is the fingerprint that proves, from inside the pod, that the isolation is real. Now let's open the hood.">
+  <div class="chip" style="color:var(--teal)"><span class="dot" style="background:var(--teal)"></span>The Demo</div>
+  <h2 style="margin-top:14px">What the kernel versions tell you</h2>
+  <div class="row grow" style="gap:22px;margin-top:24px">
+    <div class="card" style="flex:1">
+      <span class="badge" style="background:var(--teal)">6.18.35</span>
+      <h3 style="margin-top:18px;font-size:20px">A real, separate kernel</h3>
+      <p class="muted" style="font-size:15px;margin-top:14px">Both microVM pods boot an actual Linux kernel of their own inside the VM.</p>
+      <p class="muted" style="font-size:15px;margin-top:12px">A kernel exploit stays trapped in that VM — it never reaches the host kernel or the neighbors.</p>
+    </div>
+    <div class="card" style="flex:1">
+      <span class="badge" style="background:var(--violet)">4.19.0-gvisor</span>
+      <h3 style="margin-top:18px;font-size:20px">Not Linux at all</h3>
+      <p class="muted" style="font-size:15px;margin-top:14px">gVisor answers the app with its own kernel, written in Go, running in userspace.</p>
+      <p class="muted" style="font-size:15px;margin-top:12px">The app's syscalls are serviced by gVisor — the host kernel is barely touched, and no KVM is needed.</p>
+    </div>
+  </div>
+  <p style="font-style:italic;font-size:15px;margin-top:22px"><span class="muted">The version is printed from inside the pod —</span> <b>proof each workload really has its own kernel.</b></p>
+  <div class="foot"><div class="l"><span class="d"></span>Sandboxing agents · microVMs on EKS</div><div>The Demo</div></div>
+</section>
+
+<!-- 12 DIVIDER ARCH -->
+<section class="slide" data-notes="Section three: how it works — from a runtimeClassName field to a booted microVM.">
+  <div class="photo" style="background-image:url(assets/security_lock.jpg)"></div>
+  <div class="scrim" style="background:#0A0E16c0"></div>
+  <div class="layer" style="justify-content:center">
+    <div style="font-size:68px;font-weight:800;color:var(--violet)">03</div>
+    <h1 style="margin-top:6px">How it works</h1>
+  </div>
+</section>
+
+<!-- 15 AWS ARCHITECTURE -->
+<section class="slide" data-notes="The AWS side — all of this is one terraform apply, 57 resources.
+
+It lives in one VPC. Public subnets hold an internet gateway and a NAT gateway so the node can pull images without being reachable from outside. The private subnet holds the single worker node — a c8i.large with nested virtualization on, which is where /dev/kvm and the three runtimes live.
+
+EKS is the managed control plane; the node joins it through an access entry.
+
+There is no SSH: the node's IAM role turns on SSM Session Manager, so we reach it through the AWS control plane with no keys and no open ports. Destroy and re-apply gives the same thing back.">
+  <div class="chip" style="color:var(--violet)"><span class="dot" style="background:var(--violet)"></span>How it works</div>
+  <h2 style="margin-top:12px">What runs in AWS</h2>
+  <div class="sub" style="font-size:14px">One VPC, one node, a managed control plane — 57 resources from one terraform apply.</div>
+  <div style="margin-top:16px;border:1px solid var(--border);border-radius:14px;padding:16px;background:var(--panel)">
+    <div class="mono muted" style="font-size:12px;margin-bottom:12px">AWS · us-west-2</div>
+    <div class="row" style="gap:16px;align-items:stretch">
+      <div style="flex:.85;border:1.5px solid var(--teal);border-radius:10px;padding:14px;background:#12242A;display:flex;flex-direction:column;justify-content:center">
+        <b style="color:var(--teal);font-size:15px">EKS control plane</b>
+        <div class="muted" style="font-size:12px;margin-top:6px">managed by AWS · k8s 1.36</div>
+        <div class="mono muted" style="font-size:10.5px;margin-top:12px">access entry&nbsp;↔&nbsp;node</div>
+      </div>
+      <div style="flex:1.75;border:1.5px solid var(--border);border-radius:10px;padding:14px;background:var(--bg2)">
+        <div class="mono muted" style="font-size:11px;margin-bottom:10px">VPC · 10.19.0.0/16</div>
+        <div style="border:1px dashed var(--border);border-radius:8px;padding:10px;margin-bottom:10px">
+          <div class="mono muted" style="font-size:10px;margin-bottom:8px">public subnets</div>
+          <div class="row" style="gap:10px">
+            <div style="flex:1;background:var(--panel2);border:1px solid var(--border);border-radius:7px;padding:9px;text-align:center;font-size:12px">Internet Gateway</div>
+            <div style="flex:1;background:var(--panel2);border:1px solid var(--border);border-radius:7px;padding:9px;text-align:center;font-size:12px">NAT Gateway</div>
+          </div>
+        </div>
+        <div style="border:1px dashed var(--border);border-radius:8px;padding:10px">
+          <div class="mono muted" style="font-size:10px;margin-bottom:8px">private subnet</div>
+          <div style="background:var(--panel2);border:1.5px solid var(--amber);border-radius:8px;padding:11px 12px">
+            <b style="font-size:14px">EC2 c8i.large — worker node</b>
+            <div class="row" style="gap:6px;margin-top:9px">
+              <span style="border:1px solid var(--green);color:var(--green);border-radius:20px;padding:2px 10px;font-size:11px;font-family:var(--mono)">/dev/kvm</span>
+              <span style="border:1px solid var(--teal);color:var(--teal);border-radius:20px;padding:2px 10px;font-size:11px;font-family:var(--mono)">kata-clh</span>
+              <span style="border:1px solid var(--amber);color:var(--amber);border-radius:20px;padding:2px 10px;font-size:11px;font-family:var(--mono)">kata-fc</span>
+              <span style="border:1px solid var(--violet);color:var(--violet);border-radius:20px;padding:2px 10px;font-size:11px;font-family:var(--mono)">runsc</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:14px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:11px 14px;font-size:13px"><b>IAM role + SSM Session Manager</b> <span class="muted">— reach the node with no SSH keys and no open inbound ports</span></div>
+  </div>
+  <div class="foot"><div class="l"><span class="d"></span>Sandboxing agents · microVMs on EKS</div><div>How it works</div></div>
+</section>
+
+<!-- 17 K8S RESOURCES -->
+<section class="slide" data-notes="On the Kubernetes side there are only two kinds of object, and they're tiny.
+
+First, a RuntimeClass per runtime — that's the thing that registers a handler name (kata-clh, kata-fc, runsc) with the cluster, matching the containerd handlers on the node.
+
+Second, the workloads. Each is an ordinary alpine pod — the only special line is runtimeClassName, which points at one of those RuntimeClasses. That single field is the whole opt-in; everything else is a normal pod that just prints its kernel.
+
+So a developer picks the isolation level with one line of YAML. Same shape across all three — only the name changes.">
+  <div class="chip" style="color:var(--violet)"><span class="dot" style="background:var(--violet)"></span>How it works</div>
+  <h2 style="margin-top:12px">What runs in Kubernetes</h2>
+  <div class="sub" style="font-size:14px">A RuntimeClass plus a test pod per runtime — the pod opts in with one line. Abbreviated.</div>
+  <div class="row" style="gap:14px;margin-top:16px;align-items:stretch">
+    <div class="term" style="flex:1;border:1.5px solid var(--teal)">
+      <div class="bar" style="background:var(--teal)">kata-clh</div>
+      <div class="body" style="font-size:11px;line-height:1.6">
+        <span class="muted"># RuntimeClass</span><br>
+        kind: RuntimeClass<br>
+        name:&nbsp;&nbsp;&nbsp;&nbsp;<b style="color:var(--teal)">kata-clh</b><br>
+        handler: <b style="color:var(--teal)">kata-clh</b><br>
+        <span class="muted">---</span><br>
+        <span class="muted"># Pod — opts in by name</span><br>
+        kind: Pod<br>
+        runtimeClassName: <b style="color:var(--teal)">kata-clh</b><br>
+        containers:<br>
+        - image: alpine:latest<br>
+        &nbsp;&nbsp;<span style="color:var(--teal)">→ "Hello from inside</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--teal)">Cloud Hypervisor!"</span>
+      </div>
+    </div>
+    <div class="term" style="flex:1;border:1.5px solid var(--amber)">
+      <div class="bar" style="background:var(--amber)">kata-fc</div>
+      <div class="body" style="font-size:11px;line-height:1.6">
+        <span class="muted"># RuntimeClass</span><br>
+        kind: RuntimeClass<br>
+        name:&nbsp;&nbsp;&nbsp;&nbsp;<b style="color:var(--amber)">kata-fc</b><br>
+        handler: <b style="color:var(--amber)">kata-fc</b><br>
+        <span class="muted">---</span><br>
+        <span class="muted"># Pod — opts in by name</span><br>
+        kind: Pod<br>
+        runtimeClassName: <b style="color:var(--amber)">kata-fc</b><br>
+        containers:<br>
+        - image: alpine:latest<br>
+        &nbsp;&nbsp;<span style="color:var(--amber)">→ "Hello from inside</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--amber)">Firecracker!"</span>
+      </div>
+    </div>
+    <div class="term" style="flex:1;border:1.5px solid var(--violet)">
+      <div class="bar" style="background:var(--violet)">runsc</div>
+      <div class="body" style="font-size:11px;line-height:1.6">
+        <span class="muted"># RuntimeClass</span><br>
+        kind: RuntimeClass<br>
+        name:&nbsp;&nbsp;&nbsp;&nbsp;<b style="color:var(--violet)">runsc</b><br>
+        handler: <b style="color:var(--violet)">runsc</b><br>
+        <span class="muted">---</span><br>
+        <span class="muted"># Pod — opts in by name</span><br>
+        kind: Pod<br>
+        runtimeClassName: <b style="color:var(--violet)">runsc</b><br>
+        containers:<br>
+        - image: alpine:latest<br>
+        &nbsp;&nbsp;<span style="color:var(--violet)">→ "Hello from inside</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--violet)">gVisor!"</span>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><div class="l"><span class="d"></span>Sandboxing agents · microVMs on EKS</div><div>How it works</div></div>
+</section>
+
+<!-- 13 STACK DIAGRAM -->
+<section class="slide" data-notes="This is the mental model for the whole thing — the same diagram from the repo.
+
+Top down: agents run on Kubernetes, which hands containers to containerd. containerd then picks one of three runtimes.
+
+Teal, on the left: Kata runs the container inside a microVM — Linux KVM plus a monitor, either Firecracker or Cloud Hypervisor. This path needs hardware virtualization, which on EC2 means a c8i instance.
+
+Violet, middle: gVisor. Its Sentry kernel runs in userspace, so it needs no virtualization — it even runs on VMware ESXi. The cost is about 20-30 percent slower.
+
+Red, right: the default, runc. It shares the host kernel — fine for trusted code, not safe for agent code. That red box is what we are avoiding.
+
+We use the two safe columns.">
+  <div class="chip" style="color:var(--violet)"><span class="dot" style="background:var(--violet)"></span>How it works</div>
+  <h2 style="margin-top:12px">The whole stack, at a glance</h2>
+  <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px">
+    <div style="background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:9px;text-align:center;font-weight:700;font-size:14px">agents</div>
+    <div style="background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:9px;text-align:center;font-weight:700;font-size:14px">Kubernetes</div>
+    <div style="background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:9px;text-align:center;font-weight:700;font-size:14px">containerd&nbsp;&nbsp;·&nbsp;&nbsp;CRI-O</div>
+    <div class="row" style="gap:12px;margin-top:4px;align-items:stretch">
+      <div style="flex:1.55;border:1.5px solid var(--teal);border-radius:12px;padding:13px;background:#12242A">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <b style="color:var(--teal);font-size:15px">Kata &nbsp;→&nbsp; microVM</b>
+          <span class="mono muted" style="font-size:10px">needs /dev/kvm</span>
+        </div>
+        <div style="background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-top:10px;text-align:center"><span class="mono" style="font-size:12px">Linux KVM</span></div>
+        <div class="row" style="gap:8px;margin-top:8px">
+          <div style="flex:1;border:1px solid var(--amber);color:var(--amber);border-radius:7px;padding:7px 2px;text-align:center;font-size:11px;font-weight:700">Firecracker</div>
+          <div style="flex:1;border:1px solid var(--teal);color:var(--teal);border-radius:7px;padding:7px 2px;text-align:center;font-size:11px;font-weight:700">Cloud&nbsp;Hypervisor</div>
+          <div style="flex:.7;border:1px solid var(--border);color:var(--muted);border-radius:7px;padding:7px 2px;text-align:center;font-size:11px;font-weight:700">QEMU</div>
+        </div>
+      </div>
+      <div style="flex:1.05;border:1.5px solid var(--violet);border-radius:12px;padding:13px;background:#241E38">
+        <b style="color:var(--violet);font-size:15px">gVisor · runsc</b>
+        <div style="background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-top:10px;text-align:center"><span class="mono" style="font-size:12px">Sentry — userspace kernel</span></div>
+        <div class="muted" style="font-size:11.5px;margin-top:10px;line-height:1.6"><span style="color:var(--green)">+ no virtualization · runs on ESXi</span><br>− ~20-30% slower</div>
+      </div>
+      <div style="flex:.82;border:1.5px solid var(--red);border-radius:12px;padding:13px;background:#3A1E22">
+        <b style="color:var(--red);font-size:15px">runc</b>
+        <div class="muted" style="font-size:11.5px;margin-top:10px;line-height:1.6">default in k8s<br>shares the host kernel<br><span style="color:var(--red)">insecure for agent code</span></div>
+      </div>
+    </div>
+    <div style="margin-top:4px;background:var(--bg2);border:1px solid var(--border);border-radius:9px;padding:9px;text-align:center;color:var(--muted);font-size:13px">Nested virtualization (c8i instances) &nbsp;·&nbsp; bare metal</div>
+  </div>
+  <div class="foot"><div class="l"><span class="d"></span>Sandboxing agents · microVMs on EKS</div><div>How it works</div></div>
+</section>
+
+<!-- 13 RUNTIME STACK -->
+<section class="slide" data-notes="Let's trace one pod from YAML to execution.
+
+It starts with the pod declaring runtimeClassName — here, kata-clh. The kubelet matches it to a RuntimeClass object we installed. The RuntimeClass has a 'handler' name. The kubelet passes that handler to containerd.
+
+Key step: containerd has a config that maps each handler to a specific low-level runtime shim. kata-clh and kata-fc both map to the Kata shim — io.containerd.kata.v2 — but with different config files, one pointing at Cloud Hypervisor, the other at Firecracker. runsc maps to a different shim, io.containerd.runsc.v1, which is gVisor.
+
+So the entire 'which isolation engine' decision is a lookup table in containerd's config. The developer picks with one line; the platform wires up the rest. That mapping is written at node boot — which is the next thing.">
+  <div class="chip" style="color:var(--violet)"><span class="dot" style="background:var(--violet)"></span>How It Works</div>
+  <h2 style="margin-top:14px">How a pod reaches the right engine</h2>
+  <div class="row" style="align-items:center;margin-top:34px;gap:0">
+    <div style="display:flex;align-items:center;flex:1.7">
+      <div class="card" style="flex:1;padding:16px"><h3 style="color:var(--teal);font-size:18px">Pod</h3><div class="mono muted" style="font-size:11px;margin-top:8px">runtimeClassName:<br>kata-clh</div></div>
+      <div class="arrow">→</div>
+      <div class="card" style="flex:1;padding:16px"><h3 style="font-size:18px">kubelet</h3><div class="mono muted" style="font-size:11px;margin-top:8px">matches the<br>RuntimeClass</div></div>
+      <div class="arrow">→</div>
+      <div class="card" style="flex:1;padding:16px"><h3 style="font-size:18px">containerd</h3><div class="mono muted" style="font-size:11px;margin-top:8px">looks up the<br>handler</div></div>
+    </div>
+    <div class="arrow">→</div>
+    <div style="display:flex;flex-direction:column;gap:12px;flex:1.1">
+      <div style="background:var(--panel2);border:1.5px solid var(--teal);border-radius:10px;padding:10px 14px"><span class="mono b" style="color:var(--teal)">kata-clh</span><div class="mono muted" style="font-size:9.5px;margin-top:3px">io.containerd.kata.v2 → Cloud Hypervisor</div></div>
+      <div style="background:var(--panel2);border:1.5px solid var(--amber);border-radius:10px;padding:10px 14px"><span class="mono b" style="color:var(--amber)">kata-fc</span><div class="mono muted" style="font-size:9.5px;margin-top:3px">io.containerd.kata.v2 → Firecracker</div></div>
+      <div style="background:var(--panel2);border:1.5px solid var(--violet);border-radius:10px;padding:10px 14px"><span class="mono b" style="color:var(--violet)">runsc</span><div class="mono muted" style="font-size:9.5px;margin-top:3px">io.containerd.runsc.v1 → gVisor</div></div>
+    </div>
+  </div>
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px 20px;margin-top:34px;font-size:14px">
+    <span class="muted">The switch lives in</span> <b>containerd's config</b> <span class="muted">— each handler maps a RuntimeClass to a runtime shim. That mapping is installed at node boot.</span></div>
+  <div class="foot"><div class="l"><span class="d"></span>Sandboxing agents · microVMs on EKS</div><div>How It Works</div></div>
+</section>
+
+<!-- 16 USER-DATA -->
+<section class="slide" data-notes="This is how the node teaches itself the three runtimes at first boot — abbreviated snippets from the EC2 user-data.
+
+Kata with Cloud Hypervisor, left: download the Kata bundle, then register a containerd handler pointing at the Cloud Hypervisor config.
+
+Kata with Firecracker, middle: same idea, but Firecracker needs block storage, so user-data builds a devmapper thin-pool and the handler uses the devmapper snapshotter and the Firecracker config.
+
+gVisor, right: install the runsc binaries and register a runsc handler — a different shim type.
+
+Three handlers, one per runtimeClassName. The names we saw in the pod specs resolve to these blocks.">
+  <div class="chip" style="color:var(--violet)"><span class="dot" style="background:var(--violet)"></span>How it works</div>
+  <h2 style="margin-top:12px">Set up at first boot (EC2 user-data)</h2>
+  <div class="sub" style="font-size:14px">One containerd handler per runtime — abbreviated.</div>
+  <div class="row" style="gap:14px;margin-top:16px;align-items:stretch">
+    <div class="term" style="flex:1;border:1.5px solid var(--teal)">
+      <div class="bar" style="background:var(--teal)">kata-clh</div>
+      <div class="body" style="font-size:11.5px;line-height:1.65">
+        <span class="muted"># install Kata static → /opt/kata</span><br>
+        curl -fL kata-static.tar.zst \<br>
+        &nbsp;&nbsp;| zstd -d | tar -x -C /<br><br>
+        <span class="muted"># containerd handler</span><br>
+        [..runtimes.<b style="color:var(--teal)">kata-clh</b>]<br>
+        &nbsp;&nbsp;runtime_type =<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;"io.containerd.kata.v2"<br>
+        &nbsp;&nbsp;ConfigPath =<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;".../configuration-clh.toml"
+      </div>
+    </div>
+    <div class="term" style="flex:1;border:1.5px solid var(--amber)">
+      <div class="bar" style="background:var(--amber)">kata-fc</div>
+      <div class="body" style="font-size:11.5px;line-height:1.65">
+        <span class="muted"># Firecracker → block storage</span><br>
+        dmsetup create containerd-pool \<br>
+        &nbsp;&nbsp;--table "0 ... thin-pool ..."<br><br>
+        <span class="muted"># containerd handler</span><br>
+        [..runtimes.<b style="color:var(--amber)">kata-fc</b>]<br>
+        &nbsp;&nbsp;runtime_type =<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;"io.containerd.kata.v2"<br>
+        &nbsp;&nbsp;snapshotter = "devmapper"<br>
+        &nbsp;&nbsp;ConfigPath =<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;".../configuration-fc.toml"
+      </div>
+    </div>
+    <div class="term" style="flex:1;border:1.5px solid var(--violet)">
+      <div class="bar" style="background:var(--violet)">runsc</div>
+      <div class="body" style="font-size:11.5px;line-height:1.65">
+        <span class="muted"># install gVisor</span><br>
+        wget .../runsc \<br>
+        &nbsp;&nbsp;.../containerd-shim-runsc-v1<br>
+        mv runsc ... /usr/local/bin<br><br>
+        <span class="muted"># containerd handler</span><br>
+        [..runtimes.<b style="color:var(--violet)">runsc</b>]<br>
+        &nbsp;&nbsp;runtime_type =<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;"io.containerd.runsc.v1"
+      </div>
+    </div>
+  </div>
+  <div class="foot"><div class="l"><span class="d"></span>Sandboxing agents · microVMs on EKS</div><div>How it works</div></div>
+</section>
+
+<!-- 19 DIVIDER NEXT -->
+<section class="slide" data-notes="Section four: where the same approach fits beyond agents.">
+  <div class="photo" style="background-image:url(assets/rocket.jpg)"></div>
+  <div class="scrim" style="background:linear-gradient(180deg,#0A0E1633 0%,#0A0E1633 45%,#0A0E16dd 78%)"></div>
+  <div class="layer" style="justify-content:flex-end;padding-bottom:16px">
+    <div style="font-size:58px;font-weight:800;color:var(--amber)">04</div>
+    <h1 style="margin-top:2px">Where else this fits</h1>
+  </div>
+</section>
+
+<!-- 20 FUTURE -->
+<section class="slide" data-notes="The agent sandbox is the main goal, but the same setup fits any untrusted code. A few examples:
+
+Multi-tenant SaaS — many customers on shared nodes, isolated from each other. CI builds from forks — untrusted steps that can't reach the runner host. Plugins and notebooks — user code you didn't write. An internal serverless platform — Firecracker is what AWS Lambda runs on. Batch jobs on shared clusters. And gVisor for hosts that can't do nested virtualization.
+
+None of this is built yet — it's just where the same approach applies.">
+  <div class="chip" style="color:var(--amber)"><span class="dot" style="background:var(--amber)"></span>Where else this fits</div>
+  <h2 style="margin-top:14px">The same setup, other untrusted code</h2>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:22px">
+    <div class="card" style="padding:18px"><div class="row" style="gap:12px;align-items:center"><div class="ic sm" style="background:var(--violet)">S</div><b style="font-size:15px">Multi-tenant SaaS</b></div><p class="muted" style="font-size:13px;margin-top:12px">Many customers on shared nodes, isolated from each other.</p></div>
+    <div class="card" style="padding:18px"><div class="row" style="gap:12px;align-items:center"><div class="ic sm" style="background:var(--green)">CI</div><b style="font-size:15px">CI builds from forks</b></div><p class="muted" style="font-size:13px;margin-top:12px">Untrusted build steps can't reach the runner host.</p></div>
+    <div class="card" style="padding:18px"><div class="row" style="gap:12px;align-items:center"><div class="ic sm" style="background:var(--amber)">P</div><b style="font-size:15px">Plugins &amp; notebooks</b></div><p class="muted" style="font-size:13px;margin-top:12px">User-supplied code you didn't write.</p></div>
+    <div class="card" style="padding:18px"><div class="row" style="gap:12px;align-items:center"><div class="ic sm" style="background:var(--teal)">λ</div><b style="font-size:15px">Internal serverless</b></div><p class="muted" style="font-size:13px;margin-top:12px">Firecracker is what AWS Lambda runs on.</p></div>
+    <div class="card" style="padding:18px"><div class="row" style="gap:12px;align-items:center"><div class="ic sm" style="background:var(--violet)">B</div><b style="font-size:15px">Batch on shared clusters</b></div><p class="muted" style="font-size:13px;margin-top:12px">Third-party jobs kept off the host.</p></div>
+    <div class="card" style="padding:18px"><div class="row" style="gap:12px;align-items:center"><div class="ic sm" style="background:var(--teal)">G</div><b style="font-size:15px">Hosts without KVM</b></div><p class="muted" style="font-size:13px;margin-top:12px">gVisor works where nested virtualization isn't available.</p></div>
+  </div>
+  <div class="foot"><div class="l"><span class="d"></span>Sandboxing agents · microVMs on EKS</div><div>Where else this fits</div></div>
+</section>
+
+<!-- 21 CLOSING -->
+<section class="slide" data-notes="To wrap up — the goal was to safely run the code agents generate, and that's what this does: each agent workload runs in its own microVM.
+
+Quick recap. Problem: agent code is untrusted, and a normal container shares the host kernel. Demo: three runtimes live on EKS, each workload with its own kernel, shown by the version printed from inside the pod. And it comes down to one field, runtimeClassName, that picks a microVM or gVisor.
+
+The repo is on screen: Terraform plus the Kubernetes manifests, reproducible with the three commands from earlier.
+
+Happy to take questions, and I can run the pods live if you want to see it.">
+  <div class="photo" style="background-image:url(assets/title_datacenter.jpg)"></div>
+  <div class="scrim" style="background:linear-gradient(90deg,#0A0E16ee 0%,#0A0E16cc 45%,#0A0E1699 100%)"></div>
+  <div class="layer" style="justify-content:center">
+    <div class="chip" style="color:var(--teal);margin-bottom:16px"><span class="dot" style="background:var(--teal)"></span>Thank You</div>
+    <h1 style="font-size:40px;line-height:1.12">Each agent workload runs<br>in its own microVM.</h1>
+    <div style="margin-top:26px;display:flex;flex-direction:column;gap:11px;font-size:16px">
+      <div><span style="color:var(--red)">●</span> <b>Problem</b> — <span style="color:#D7DEE8">agent code is untrusted; a container shares the host kernel</span></div>
+      <div><span style="color:var(--teal)">●</span> <b>Demo</b> — <span style="color:#D7DEE8">three runtimes on EKS, each workload with its own kernel</span></div>
+      <div><span style="color:var(--violet)">●</span> <b>How</b> — <span style="color:#D7DEE8">one runtimeClassName picks a microVM or gVisor</span></div>
+    </div>
+    <div style="margin-top:26px;display:inline-flex;align-items:center;border:1px solid var(--teal);border-radius:24px;padding:10px 20px;width:fit-content">
+      <span class="mono" style="font-size:14px"><span class="muted">repo: </span><b style="color:var(--teal)">github.com/jameswu1991/kata-test</b> &nbsp;·&nbsp; Questions?</span>
+    </div>
+  </div>
+</section>
+
+</template>
+
+<style>
+  /* small helpers referenced above */
+  .cont{flex:1;background:var(--panel2);border:1.5px solid var(--c);border-radius:10px;
+        padding:12px 8px;text-align:center;font-family:var(--mono);font-weight:700;font-size:14px}
+  .cont::after{content:'container';display:block;font-family:var(--head);font-weight:400;
+        color:var(--muted);font-size:9px;margin-top:3px}
+  .prow{display:flex;align-items:center;gap:0;background:var(--panel);border:1px solid var(--border);
+        border-left:5px solid var(--c);border-radius:9px;padding:16px 18px;margin-bottom:11px}
+  .prow .b{font-weight:700}
+  .cc{color:var(--c)!important}
+  .b{font-weight:700}
+</style>
+
+<script>
+  // move templated slides into the stage
+  const stage = document.getElementById('stage');
+  const tpl = document.getElementById('slides');
+  stage.appendChild(tpl.content.cloneNode(true));
+  const slides = [...stage.querySelectorAll('.slide')];
+  document.getElementById('tot').textContent = slides.length;
+
+  let i = 0;
+  const notes = document.getElementById('notes');
+  const notesBody = document.getElementById('notesBody');
+  function show(n){
+    i = Math.max(0, Math.min(slides.length-1, n));
+    slides.forEach((s,k)=>s.classList.toggle('active',k===i));
+    document.getElementById('cur').textContent = i+1;
+    notesBody.innerHTML = '<p>'+(slides[i].dataset.notes||'').replace(/\n\n/g,'</p><p>').replace(/\n/g,'<br>')+'</p>';
+  }
+  function scale(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    stage.style.transform = 'scale('+s+')';
+  }
+  window.addEventListener('resize', scale);
+  window.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){show(i+1);e.preventDefault();}
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){show(i-1);e.preventDefault();}
+    else if(e.key==='Home'){show(0);}
+    else if(e.key==='End'){show(slides.length-1);}
+    else if(e.key==='n'||e.key==='N'){notes.classList.toggle('show');}
+    else if(e.key==='f'||e.key==='F'){if(!document.fullscreenElement)document.documentElement.requestFullscreen();else document.exitFullscreen();}
+  });
+  // click / tap navigation
+  stage.addEventListener('click', e=>{ if(e.clientX < window.innerWidth*0.28) show(i-1); else show(i+1); });
+  scale(); show(0);
+</script>
+</body>
+</html>
